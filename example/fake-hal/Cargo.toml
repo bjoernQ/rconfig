@@ -1,0 +1,16 @@
+[package]
+name = "fake-hal"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+
+
+[build-dependencies]
+rconfig = { path = "../../../rconfig" }
+
+[features]
+esp32 = []
+esp32s3 = []
+esp32c6 = []
+flip-link = []

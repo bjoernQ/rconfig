@@ -1,0 +1,17 @@
+[package]
+name = "example"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+fake-hal = { path = "../fake-hal" }
+fake-wifi = { path = "../fake-wifi" }
+
+[features]
+default = ["esp32s3", "flip-link"]
+
+esp32 = ["fake-hal/esp32", "fake-wifi/esp32"]
+esp32s3 = ["fake-hal/esp32s3", "fake-wifi/esp32s3"]
+esp32c6 = ["fake-hal/esp32c6", "fake-wifi/esp32c6"]
+flip-link = ["fake-hal/flip-link"]
+ble = ["fake-wifi/ble"]

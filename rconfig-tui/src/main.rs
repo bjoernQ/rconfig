@@ -1,0 +1,537 @@
+use cargo_metadata::Message;
+use rconfig::{ConfigOption, ValueType};
+use std::{
+    collections::BTreeMap,
+    io::*,
+    process::{Command, Stdio},
+};
+
+use std::io;
+
+use crossterm::ExecutableCommand;
+use crossterm::{
+    event::{self, Event, KeyCode, KeyEventKind},
+    terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
+};
+use ratatui::{prelude::*, style::palette::tailwind, widgets::*};
+
+struct Rconfig {
+    crate_name: String,
+    definition: String,
+    features: String,
+}
+
+fn main() {
+    let mut command = Command::new("cargo")
+        .args(&["build", "--message-format=json"])
+        .stdout(Stdio::piped())
+        .spawn()
+        .unwrap();
+
+    let reader = std::io::BufReader::new(command.stdout.take().unwrap());
+
+    let mut result: Vec<Rconfig> = Vec::new();
+    for message in cargo_metadata::Message::parse_stream(reader) {
+        match message.unwrap() {
+            Message::BuildScriptExecuted(script) => {
+                let envs = script.env;
+                let env_map: BTreeMap<_, _> =
+                    envs.into_iter().map(|data| (data.0, data.1)).collect();
+
+                if env_map.contains_key("__RCONFIG") {
+                    let definition = env_map.get("__RCONFIG").unwrap().replace("%N%", "\n");
+                    let crate_name = env_map.get("__RCONFIG_CRATE").unwrap().to_string();
+                    let features = env_map.get("__RCONFIG_FEATURES").unwrap().to_string();
+
+                    result.push(Rconfig {
+                        crate_name,
+                        definition,
+                        features,
+                    });
+                }
+            }
+            _ => (), // don't care
+        }
+    }
+
+    let _output = command.wait().expect("Couldn't get cargo's exit status");
+
+    let input = std::fs::read_to_string(std::path::PathBuf::from("./config.toml")).unwrap();
+    let mut all_data: BTreeMap<String, (BTreeMap<String, ConfigOption>, Vec<String>)> =
+        BTreeMap::new();
+    for res in result {
+        let definition = std::fs::read_to_string(res.definition).unwrap();
+        let config = rconfig::parse_definition_str(&definition);
+        all_data.insert(
+            res.crate_name,
+            (
+                config,
+                res.features.split(",").map(|v| v.to_string()).collect(),
+            ),
+        );
+    }
+    let repository = Repository::new(all_data, input);
+
+    // TUI stuff ahead
+    let terminal = init_terminal().unwrap();
+
+    // create app and run it
+    App::new(repository).run(terminal).unwrap();
+
+    restore_terminal().unwrap();
+}
+
+struct Repository {
+    data: BTreeMap<String, (BTreeMap<String, ConfigOption>, Vec<String>)>,
+    user_cfg: String,
+    path: Vec<String>,
+}
+
+impl Repository {
+    pub fn new(
+        data: BTreeMap<String, (BTreeMap<String, ConfigOption>, Vec<String>)>,
+        user_cfg: String,
+    ) -> Self {
+        Self {
+            data,
+            user_cfg,
+            path: Vec::new(),
+        }
+    }
+
+    fn create_config(&self) -> String {
+        let mut out = String::new();
+
+        for (crate_name, (crate_config, crate_features)) in &self.data {
+            let crate_features: Vec<&str> =
+                crate_features.into_iter().map(|v| v.as_str()).collect();
+
+            let crate_config = rconfig::evaluate_config_str_to_cfg(
+                &self.user_cfg,
+                &crate_name,
+                crate_config.clone(),
+                crate_features.clone(),
+            )
+            .unwrap();
+
+            out.push_str(&format!("[{crate_name}]"));
+            out.push_str("\n");
+
+            let cfgs =
+                rconfig::current_config_values(crate_config, crate_features.clone()).unwrap();
+            for (name, value) in cfgs {
+                out.push_str(&format!("{name}={value}"));
+                out.push_str("\n");
+            }
+        }
+        out
+    }
+
+    fn current(&self) -> BTreeMap<String, ConfigOption> {
+        let crate_name = &self.path[0];
+        let current = &(self.data[crate_name]).0;
+        let features = self.current_features();
+        let features = features.into_iter().map(|v| v.as_str()).collect();
+        let config = rconfig::evaluate_config_str_to_cfg(
+            &self.user_cfg,
+            &crate_name,
+            current.clone(),
+            features,
+        )
+        .unwrap();
+
+        let mut current = &config;
+
+        for path_elem in &self.path[1..] {
+            current = current.get(path_elem).unwrap().options.as_ref().unwrap();
+        }
+        current.clone()
+    }
+
+    fn current_features(&self) -> &Vec<String> {
+        &(self.data[&self.path[0]]).1
+    }
+
+    pub fn get_current_level(&self) -> Vec<String> {
+        let mut res = Vec::new();
+
+        if self.path.is_empty() {
+            for (item, _) in &self.data {
+                res.push(item.to_string());
+            }
+        } else {
+            let current = self.current();
+            for (item, _) in current {
+                res.push(item.to_string());
+            }
+        }
+
+        res
+    }
+
+    pub fn get_current_level_desc(&self) -> Vec<String> {
+        let mut res = Vec::new();
+
+        if self.path.is_empty() {
+            for (item, _) in &self.data {
+                res.push(item.to_string());
+            }
+        } else {
+            let current = self.current();
+            for (_item, option) in current {
+                let values = &option.values;
+                let current_value = if let Some(value) = &option.__value {
+                    format!("({})", Self::display_value(value, values))
+                } else if let Some(value) = &option.default_value {
+                    format!("(DEFAULT = {})", Self::display_value(value, values))
+                } else {
+                    String::new()
+                };
+
+                res.push(
+                    format!("{} {}", option.description.to_string(), current_value).to_string(),
+                );
+            }
+        }
+
+        res
+    }
+
+    fn display_value(value: &rconfig::Value, values: &Option<Vec<rconfig::ValueItem>>) -> String {
+        if values.is_none() {
+            return value.to_string();
+        } else {
+            let display = values
+                .as_ref()
+                .unwrap()
+                .iter()
+                .find(|v| v.value == *value)
+                .unwrap();
+            return display.description.to_string();
+        }
+    }
+
+    pub fn get_count(&self) -> usize {
+        if self.path.is_empty() {
+            self.data.len()
+        } else {
+            self.current().len()
+        }
+    }
+
+    pub fn current_title(&self) -> String {
+        if self.path.is_empty() {
+            String::from("Root")
+        } else {
+            let mut title = self.path[0].clone();
+            let mut current = &(self.data[&self.path[0]]).0;
+            for path_elem in &self.path[1..] {
+                title = current.get(path_elem).unwrap().description.clone();
+                current = current.get(path_elem).unwrap().options.as_ref().unwrap();
+            }
+            title
+        }
+    }
+
+    pub fn select(&mut self, select: usize) {
+        let next = self
+            .get_current_level()
+            .into_iter()
+            .enumerate()
+            .find(|(index, _value)| *index == select)
+            .unwrap()
+            .1;
+        self.path.push(next);
+    }
+
+    pub fn up(&mut self) {
+        if !self.path.is_empty() {
+            self.path.remove(self.path.len() - 1);
+        }
+    }
+
+    pub fn is_value(&self, which: usize) -> bool {
+        if self.path.is_empty() {
+            false
+        } else {
+            let next = self
+                .get_current_level()
+                .into_iter()
+                .enumerate()
+                .find(|(index, _value)| *index == which)
+                .unwrap()
+                .1;
+
+            self.current()
+                .get(&next)
+                .as_ref()
+                .unwrap()
+                .options
+                .is_none()
+        }
+    }
+
+    pub fn get_option(&self, which: usize) -> Option<ConfigOption> {
+        if self.path.is_empty() {
+            None
+        } else {
+            let next = self
+                .get_current_level()
+                .into_iter()
+                .enumerate()
+                .find(|(index, _value)| *index == which)
+                .unwrap()
+                .1;
+
+            Some((*self.current().get(&next).as_ref().unwrap()).clone())
+        }
+    }
+
+    pub fn set_value(&mut self, which: usize, value: rconfig::Value) {
+        let next = self
+            .get_current_level()
+            .into_iter()
+            .enumerate()
+            .find(|(index, _value)| *index == which)
+            .unwrap()
+            .1;
+
+        let mut cfg = basic_toml::from_str::<rconfig::Value>(&self.user_cfg).unwrap();
+
+        let crate_cfg = cfg.as_object_mut().unwrap().get_mut(&self.path[0]).unwrap();
+        let mut item = crate_cfg;
+        for path_elem in &self.path[1..] {
+            if !item
+                .as_object_mut()
+                .unwrap()
+                .contains_key(path_elem.as_str())
+            {
+                item.as_object_mut().unwrap().insert(
+                    path_elem.to_string(),
+                    rconfig::Value::Object(Default::default()),
+                );
+            }
+            item = item
+                .as_object_mut()
+                .unwrap()
+                .get_mut(path_elem.as_str())
+                .unwrap();
+        }
+
+        if item.as_object_mut().unwrap().contains_key(&next) {
+            item.as_object_mut().unwrap().remove(&next);
+        }
+
+        item.as_object_mut().unwrap().insert(next, value);
+
+        self.user_cfg = basic_toml::to_string(&cfg).unwrap();
+    }
+}
+
+const TODO_HEADER_BG: Color = tailwind::BLUE.c950;
+const NORMAL_ROW_COLOR: Color = tailwind::SLATE.c950;
+const SELECTED_STYLE_FG: Color = tailwind::BLUE.c300;
+const TEXT_COLOR: Color = tailwind::SLATE.c200;
+
+fn init_terminal() -> Result<Terminal<impl Backend>> {
+    enable_raw_mode()?;
+    stdout().execute(EnterAlternateScreen)?;
+    let backend = CrosstermBackend::new(stdout());
+    let terminal = Terminal::new(backend)?;
+    Ok(terminal)
+}
+
+fn restore_terminal() -> Result<()> {
+    disable_raw_mode()?;
+    stdout().execute(LeaveAlternateScreen)?;
+    Ok(())
+}
+
+struct App {
+    state: ListState,
+    repository: Repository,
+}
+
+impl App {
+    fn new(repository: Repository) -> Self {
+        let mut initial_state = ListState::default();
+        initial_state.select(Some(0));
+        Self {
+            repository,
+            state: initial_state,
+        }
+    }
+}
+
+impl App {
+    fn run(&mut self, mut terminal: Terminal<impl Backend>) -> io::Result<()> {
+        loop {
+            self.draw(&mut terminal)?;
+
+            if let Event::Key(key) = event::read()? {
+                if key.kind == KeyEventKind::Press {
+                    use KeyCode::*;
+                    match key.code {
+                        Char('q') | Esc => return Ok(()),
+                        Char('h') | Left => {
+                            self.repository.up();
+                            self.state.select(Some(0));
+                        }
+                        Char('l') | Right | Enter => {
+                            let selected = self.state.selected().unwrap_or_default();
+                            if self.repository.is_value(selected) {
+                                let option = self.repository.get_option(selected);
+                                if let Some(option) = option {
+                                    if let Some(value_type) = option.value_type {
+                                        if value_type == ValueType::Bool {
+                                            let current_value = option
+                                                .__value
+                                                .unwrap_or(option.default_value.unwrap())
+                                                .as_bool()
+                                                .unwrap();
+                                            self.repository.set_value(
+                                                selected,
+                                                rconfig::Value::Bool(!current_value),
+                                            )
+                                        } else if value_type == ValueType::Enum {
+                                            let current_value = option
+                                                .__value
+                                                .unwrap_or(option.default_value.unwrap());
+
+                                            let values = option.values.as_ref().unwrap();
+                                            let index = &values
+                                                .into_iter()
+                                                .enumerate()
+                                                .find(|v| v.1.value == current_value)
+                                                .unwrap()
+                                                .0;
+                                            let index = (index + 1) % &values.len();
+
+                                            self.repository
+                                                .set_value(selected, values[index].value.clone())
+                                        }
+
+                                        // TODO show popup for changing the current value
+                                    }
+                                }
+                            } else {
+                                self.repository
+                                    .select(self.state.selected().unwrap_or_default());
+                                self.state.select(Some(0));
+                            }
+                        }
+                        Char('j') | Down => {
+                            if self.state.selected().unwrap_or_default()
+                                < self.repository.get_count() - 1
+                            {
+                                self.state
+                                    .select(Some(self.state.selected().unwrap_or_default() + 1));
+                            }
+                        }
+                        Char('k') | Up => {
+                            if self.state.selected().unwrap_or_default() > 0 {
+                                self.state
+                                    .select(Some(self.state.selected().unwrap_or_default() - 1));
+                            }
+                        }
+                        Char('s') => {
+                            let cfg = self.repository.create_config();
+                            std::fs::write("./config.toml", cfg).unwrap();
+                            return Ok(());
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        }
+    }
+
+    fn draw(&mut self, terminal: &mut Terminal<impl Backend>) -> io::Result<()> {
+        terminal.draw(|f| f.render_widget(self, f.size()))?;
+        Ok(())
+    }
+}
+
+impl Widget for &mut App {
+    fn render(self, area: Rect, buf: &mut Buffer) {
+        // Create a space for header, todo list and the footer.
+        let vertical = Layout::vertical([
+            Constraint::Length(2),
+            Constraint::Min(0),
+            Constraint::Length(2),
+        ]);
+        let [header_area, rest_area, footer_area] = vertical.areas(area);
+
+        // Create two chunks with equal vertical screen space. One for the list and the other for
+        // the info block.
+        let vertical = Layout::vertical([Constraint::Percentage(100)]);
+        let [upper_item_list_area] = vertical.areas(rest_area);
+
+        render_title(header_area, buf);
+        self.render_item(upper_item_list_area, buf);
+        render_footer(footer_area, buf);
+    }
+}
+
+impl App {
+    fn render_item(&mut self, area: Rect, buf: &mut Buffer) {
+        // We create two blocks, one is for the header (outer) and the other is for list (inner).
+        let outer_block = Block::default()
+            .borders(Borders::NONE)
+            .fg(TEXT_COLOR)
+            .bg(TODO_HEADER_BG)
+            .title(self.repository.current_title())
+            .title_alignment(Alignment::Center);
+        let inner_block = Block::default()
+            .borders(Borders::NONE)
+            .fg(TEXT_COLOR)
+            .bg(NORMAL_ROW_COLOR);
+
+        // We get the inner area from outer_block. We'll use this area later to render the table.
+        let outer_area = area;
+        let inner_area = outer_block.inner(outer_area);
+
+        // We can render the header in outer_area.
+        outer_block.render(outer_area, buf);
+
+        // Iterate through all elements in the `items` and stylize them.
+        let items: Vec<ListItem> = self
+            .repository
+            .get_current_level_desc()
+            .into_iter()
+            .map(|v| ListItem::new(v))
+            .collect();
+
+        // Create a List from all list items and highlight the currently selected one
+        let items = List::new(items)
+            .block(inner_block)
+            .highlight_style(
+                Style::default()
+                    .add_modifier(Modifier::BOLD)
+                    .add_modifier(Modifier::REVERSED)
+                    .fg(SELECTED_STYLE_FG),
+            )
+            .highlight_symbol(">")
+            .highlight_spacing(HighlightSpacing::Always);
+
+        // We can now render the item list
+        // (look careful we are using StatefulWidget's render.)
+        // ratatui::widgets::StatefulWidget::render as stateful_render
+        StatefulWidget::render(items, inner_area, buf, &mut self.state);
+    }
+}
+
+fn render_title(area: Rect, buf: &mut Buffer) {
+    Paragraph::new("rconfig")
+        .bold()
+        .centered()
+        .render(area, buf);
+}
+
+fn render_footer(area: Rect, buf: &mut Buffer) {
+    Paragraph::new(
+        "\nUse ↓↑ to move, ← to go up, → to go deeper or change the value, s/S to save and exit",
+    )
+    .centered()
+    .render(area, buf);
+}

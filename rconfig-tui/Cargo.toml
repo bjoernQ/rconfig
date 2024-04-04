@@ -1,0 +1,13 @@
+[package]
+name = "rconfig-tui"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+cargo_metadata = "0.18.1"
+
+ratatui = { version = "0.26.1", features = ["crossterm"] }
+crossterm = { version = "0.27" }
+
+basic-toml = "0.1.9"
+rconfig = { path = ".." }

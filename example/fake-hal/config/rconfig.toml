@@ -1,0 +1,44 @@
+# something without a type is just a menu item
+[psram]
+description = "PSRAM"
+depends = [["esp32", "esp32s2", "esp32s3"]]
+
+# something with a type is something which can be configured
+[psram.options.enable]
+description = "Enable PSRAM"
+type = "bool"
+default = false
+
+[psram.options.size]
+description = "PSRAM Size"
+depends = [["psram.enable"]]
+type = "enum"
+values = [
+    { description = "1MB", value = 1 },
+    { description = "2MB", value = 2 },
+    { description = "4MB", value = 4 },
+]
+default = 2
+
+[psram.options.type]
+description = "PSRAM Type"
+depends = [["esp32s3"],["psram.enable"]]
+
+[psram.options.type.options.type]
+description = "PSRAM Type"
+depends = [["esp32s3"]]
+type = "enum"
+values = [
+    { description = "Quad", value = "quad" },
+    { description = "Octal", value = "octal" },
+]
+default = "quad"
+
+[heap]
+description = "Heapsize"
+
+[heap.options.size]
+description = "Bytes to allocate"
+type = "u32"
+min = 0
+max = 65536
