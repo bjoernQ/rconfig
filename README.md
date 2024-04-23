@@ -7,6 +7,13 @@
 - TUI doesn't allow changing anything but `bool` and `enum` values
 - code is just prototyping ... I guess it can be cleaned up enough to make it useable in a real project with some effort (or re-implemented from scratch based on this)
 
+## Open Questions
+
+- is it fine to use BTreeMap since it doesn't preserve the order of elements (see https://github.com/serde-rs/serde/issues/269)
+- are we fine with the definition format? do we need more flexibility regarding `depends`?
+- are we fine with getting values as env-vars?
+- probably we want to merge the TUI (as a feature) into `rconfig`?
+
 ## Idea
 
 In your crate's `build.rs` you need this
