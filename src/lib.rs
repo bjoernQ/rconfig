@@ -40,6 +40,8 @@ pub enum ValueType {
     U32,
     #[serde(rename(deserialize = "enum"))]
     Enum,
+    #[serde(rename(deserialize = "string"))]
+    String,
 }
 
 pub fn parse_definition_str(input: &str) -> Map<String, ConfigOption> {
@@ -509,6 +511,7 @@ mod tests {
         assert_eq!(
             vec![
                 ("heap.size".to_string(), "30000".to_string()),
+                ("psram.enable".to_string(), "false".to_string()),
             ],
             effective_config
         );

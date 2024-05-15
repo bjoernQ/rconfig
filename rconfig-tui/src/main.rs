@@ -1,5 +1,5 @@
 use cargo_metadata::Message;
-use rconfig::{ConfigOption, ValueType};
+use rconfig::{ConfigOption, Value, ValueType};
 use std::{
     collections::BTreeMap,
     io::*,
@@ -347,9 +347,23 @@ fn restore_terminal() -> Result<()> {
     Ok(())
 }
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum InputMode {
+    Number,
+    Chars,
+}
+
 struct App {
     state: ListState,
     repository: Repository,
+
+    show_input: bool,
+
+    input: String,
+    input_mode: InputMode,
+    cursor_position: usize,
+
+    cursor: Option<(u16, u16)>,
 }
 
 impl App {
@@ -359,6 +373,11 @@ impl App {
         Self {
             repository,
             state: initial_state,
+            show_input: false,
+            input: "".to_string(),
+            input_mode: InputMode::Chars,
+            cursor_position: 0,
+            cursor: None,
         }
     }
 }
@@ -371,75 +390,159 @@ impl App {
             if let Event::Key(key) = event::read()? {
                 if key.kind == KeyEventKind::Press {
                     use KeyCode::*;
-                    match key.code {
-                        Char('q') | Esc => return Ok(()),
-                        Char('h') | Left => {
-                            self.repository.up();
-                            self.state.select(Some(0));
-                        }
-                        Char('l') | Right | Enter => {
-                            let selected = self.state.selected().unwrap_or_default();
-                            if self.repository.is_value(selected) {
-                                let option = self.repository.get_option(selected);
-                                if let Some(option) = option {
-                                    if let Some(value_type) = option.value_type {
-                                        if value_type == ValueType::Bool {
-                                            let current_value = option
-                                                .__value
-                                                .unwrap_or(option.default_value.unwrap())
-                                                .as_bool()
-                                                .unwrap();
-                                            self.repository.set_value(
-                                                selected,
-                                                rconfig::Value::Bool(!current_value),
-                                            )
-                                        } else if value_type == ValueType::Enum {
-                                            let current_value = option
-                                                .__value
-                                                .unwrap_or(option.default_value.unwrap());
 
-                                            let values = option.values.as_ref().unwrap();
-                                            let index = &values
-                                                .into_iter()
-                                                .enumerate()
-                                                .find(|v| v.1.value == current_value)
-                                                .unwrap()
-                                                .0;
-                                            let index = (index + 1) % &values.len();
-
-                                            self.repository
-                                                .set_value(selected, values[index].value.clone())
-                                        }
-
-                                        // TODO show popup for changing the current value
-                                    }
-                                }
-                            } else {
-                                self.repository
-                                    .select(self.state.selected().unwrap_or_default());
+                    if !self.show_input {
+                        match key.code {
+                            Char('q') | Esc => return Ok(()),
+                            Char('h') | Left => {
+                                self.repository.up();
                                 self.state.select(Some(0));
+                                self.show_input = false;
                             }
-                        }
-                        Char('j') | Down => {
-                            if self.state.selected().unwrap_or_default()
-                                < self.repository.get_count() - 1
-                            {
-                                self.state
-                                    .select(Some(self.state.selected().unwrap_or_default() + 1));
+                            Char('l') | Right | Enter => {
+                                let selected = self.state.selected().unwrap_or_default();
+                                if self.repository.is_value(selected) {
+                                    let option = self.repository.get_option(selected);
+                                    if let Some(option) = option {
+                                        if let Some(value_type) = option.value_type {
+                                            if value_type == ValueType::Bool {
+                                                let current_value = option
+                                                    .__value
+                                                    .unwrap_or(option.default_value.unwrap())
+                                                    .as_bool()
+                                                    .unwrap();
+                                                self.repository.set_value(
+                                                    selected,
+                                                    rconfig::Value::Bool(!current_value),
+                                                )
+                                            } else if value_type == ValueType::Enum {
+                                                let current_value = option
+                                                    .__value
+                                                    .unwrap_or(option.default_value.unwrap());
+
+                                                let values = option.values.as_ref().unwrap();
+                                                let index = &values
+                                                    .into_iter()
+                                                    .enumerate()
+                                                    .find(|v| v.1.value == current_value)
+                                                    .unwrap()
+                                                    .0;
+                                                let index = (index + 1) % &values.len();
+
+                                                self.repository.set_value(
+                                                    selected,
+                                                    values[index].value.clone(),
+                                                )
+                                            } else {
+                                                self.input_mode = if value_type == ValueType::U32 {
+                                                    InputMode::Number
+                                                } else {
+                                                    InputMode::Chars
+                                                };
+                                                self.show_input = true;
+                                                self.input = option
+                                                    .__value
+                                                    .as_ref()
+                                                    .unwrap_or(&Value::String("".to_string()))
+                                                    .to_string();
+                                                self.cursor_position = self.input.len()
+                                            }
+                                        }
+                                    }
+                                } else {
+                                    self.repository
+                                        .select(self.state.selected().unwrap_or_default());
+                                    self.state.select(Some(0));
+                                }
                             }
-                        }
-                        Char('k') | Up => {
-                            if self.state.selected().unwrap_or_default() > 0 {
-                                self.state
-                                    .select(Some(self.state.selected().unwrap_or_default() - 1));
+                            Char('j') | Down => {
+                                if self.state.selected().unwrap_or_default()
+                                    < self.repository.get_count() - 1
+                                {
+                                    self.state.select(Some(
+                                        self.state.selected().unwrap_or_default() + 1,
+                                    ));
+                                }
                             }
+                            Char('k') | Up => {
+                                if self.state.selected().unwrap_or_default() > 0 {
+                                    self.state.select(Some(
+                                        self.state.selected().unwrap_or_default() - 1,
+                                    ));
+                                }
+                            }
+                            Char('s') => {
+                                let cfg = self.repository.create_config();
+                                std::fs::write("./config.toml", cfg).unwrap();
+                                return Ok(());
+                            }
+                            _ => {}
                         }
-                        Char('s') => {
-                            let cfg = self.repository.create_config();
-                            std::fs::write("./config.toml", cfg).unwrap();
-                            return Ok(());
+                    } else {
+                        // input mode key handling
+                        match key.code {
+                            Esc => {
+                                self.show_input = false;
+                                self.cursor = None;
+                            }
+                            Backspace => {
+                                if self.cursor_position > 0 {
+                                    self.input.remove(self.cursor_position - 1);
+                                    self.cursor_position -= 1;
+                                }
+                            }
+                            Left => {
+                                if self.cursor_position > 0 {
+                                    self.cursor_position -= 1;
+                                }
+                            }
+                            Right => {
+                                if self.cursor_position < self.input.len() {
+                                    self.cursor_position += 1;
+                                }
+                            }
+                            Enter => {
+                                let selected = self.state.selected().unwrap_or_default();
+                                if self.repository.is_value(selected) {
+                                    let option = self.repository.get_option(selected);
+
+                                    if let Some(option) = option {
+                                        match option.value_type {
+                                            Some(vt) => match vt {
+                                                ValueType::U32 => {
+                                                    let val = (self.input.parse::<u32>()).unwrap();
+                                                    self.repository.set_value(
+                                                        selected,
+                                                        rconfig::Value::Number(val.into()),
+                                                    );
+                                                }
+                                                ValueType::String => {
+                                                    let val = self.input.clone();
+                                                    self.repository.set_value(
+                                                        selected,
+                                                        rconfig::Value::String(val),
+                                                    );
+                                                }
+                                                _ => (),
+                                            },
+                                            None => (),
+                                        }
+                                    }
+                                    self.show_input = false;
+                                    self.cursor = None;
+                                }
+                            }
+                            KeyCode::Char(to_insert) => {
+                                if self.input_mode == InputMode::Chars {
+                                    self.input.insert(self.cursor_position, to_insert);
+                                    self.cursor_position += 1;
+                                } else if to_insert.is_numeric() {
+                                    self.input.insert(self.cursor_position, to_insert);
+                                    self.cursor_position += 1;
+                                }
+                            }
+                            _ => (),
                         }
-                        _ => {}
                     }
                 }
             }
@@ -447,7 +550,16 @@ impl App {
     }
 
     fn draw(&mut self, terminal: &mut Terminal<impl Backend>) -> io::Result<()> {
-        terminal.draw(|f| f.render_widget(self, f.size()))?;
+        let cursor = self.cursor;
+
+        terminal.draw(|f| {
+            f.render_widget(self, f.size());
+
+            if let Some((x, y)) = cursor {
+                f.set_cursor(x, y);
+            }
+        })?;
+
         Ok(())
     }
 }
@@ -470,6 +582,23 @@ impl Widget for &mut App {
         render_title(header_area, buf);
         self.render_item(upper_item_list_area, buf);
         render_footer(footer_area, buf);
+
+        if self.show_input {
+            let block = Block::bordered().title("Value");
+            let mut area = centered_rect(60, 20, area);
+            area.height = 3;
+            block.render(area, buf);
+
+            let text = Text::from(Line::from(self.input.clone()))
+                .patch_style(Style::default().bg(Color::Gray).fg(Color::Black));
+            area.y = area.y + area.height / 2;
+            area.x = area.x + 2;
+            area.width = area.width - 4;
+            area.height = 1;
+            text.render(area, buf);
+
+            self.cursor = Some((area.x + self.cursor_position as u16, area.y));
+        }
     }
 }
 
@@ -534,4 +663,21 @@ fn render_footer(area: Rect, buf: &mut Buffer) {
     )
     .centered()
     .render(area, buf);
+}
+
+/// helper function to create a centered rect using up certain percentage of the available rect `r`
+fn centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {
+    let popup_layout = Layout::vertical([
+        Constraint::Percentage((100 - percent_y) / 2),
+        Constraint::Percentage(percent_y),
+        Constraint::Percentage((100 - percent_y) / 2),
+    ])
+    .split(r);
+
+    Layout::horizontal([
+        Constraint::Percentage((100 - percent_x) / 2),
+        Constraint::Percentage(percent_x),
+        Constraint::Percentage((100 - percent_x) / 2),
+    ])
+    .split(popup_layout[1])[1]
 }
