@@ -340,7 +340,10 @@ pub fn load_config(definition: &str, crate_name: &str) -> Vec<(String, String)> 
         Some(x)
     });
 
-    let config = std::fs::read_to_string(cfg_path.unwrap()).unwrap();
+    let cfg_path = cfg_path.unwrap();
+    let config = std::fs::read_to_string(&cfg_path).unwrap();
+
+    println!("cargo::rerun-if-changed={}", cfg_path.to_str().unwrap());
 
     let parsed_definition = parse_definition_str(definition);
 

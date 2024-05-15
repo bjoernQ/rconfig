@@ -1,5 +1,5 @@
 [fake-hal]
-heap.size=70000
+heap.size=37283
 psram.enable=true
 psram.size=4
 psram.type.type="octal"

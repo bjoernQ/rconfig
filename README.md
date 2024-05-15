@@ -3,8 +3,7 @@
 ## Known Issues
 - almost non-existing error handling
 - not everything is validated
-- might not always trigger a new build when `config.toml` is changed
-- TUI doesn't allow changing anything but `bool` and `enum` values
+- TUI editing is not too good
 - code is just prototyping ... I guess it can be cleaned up enough to make it useable in a real project with some effort (or re-implemented from scratch based on this)
 
 ## Open Questions
