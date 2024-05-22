@@ -1,5 +1,6 @@
 use serde::Deserialize;
 pub use serde_json::Value;
+pub use serde_json::Map as JsonMap;
 use std::{collections::BTreeMap as Map, env, path::PathBuf};
 
 #[derive(Deserialize, Debug)]
@@ -75,8 +76,13 @@ pub fn evaluate_config_str(
     features: Vec<&str>,
 ) -> Result<Vec<(String, String)>, Error> {
     let input = basic_toml::from_str::<Value>(input).unwrap();
+    let no_input = basic_toml::from_str::<Value>("").unwrap();
 
-    let input = input.as_object().unwrap().get(crate_name).unwrap();
+    let input = input
+        .as_object()
+        .unwrap()
+        .get(crate_name)
+        .unwrap_or_else(|| &no_input);
 
     // fuse the user changed configs into the config
     fuse(input.clone(), &mut config)?;
@@ -341,7 +347,15 @@ pub fn load_config(definition: &str, crate_name: &str) -> Vec<(String, String)> 
     });
 
     let cfg_path = cfg_path.unwrap();
-    let config = std::fs::read_to_string(&cfg_path).unwrap();
+    let config = if let Ok(metadata) = std::fs::metadata(&cfg_path) {
+        if metadata.is_file() {
+            std::fs::read_to_string(&cfg_path).unwrap()
+        } else {
+            "".to_string()
+        }
+    } else {
+        "".to_string()
+    };
 
     println!("cargo::rerun-if-changed={}", cfg_path.to_str().unwrap());
 

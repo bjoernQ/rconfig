@@ -94,6 +94,17 @@ It will run a build of the binary crate to learn about the used crates supportin
 `ESC` will exit without saving the changes.
 `S` will save and exit the TUI.
 
-Currently it doesn't support changing numeric and string values. Just `bool` and `enum`
+Currently support for changing numeric and string values isn't great.
 
 ![TUI](./doc/tui.png)
+
+Options
+
+- `--fix`                  Ignore invalid configuration keys
+    - still launches the TUI
+    - you can save the config and have a valid config after e.g. changing features
+- `--force`                Don't ask when removing invalid configuration keys
+    - currently just disables the confirmation for `--init`
+- `--init`                 Create a new empty `config.toml`
+- `--features <FEATURES>`  Features to be passed to the build
+- `--no-default-features`  Don't activate default features

@@ -1,9 +1,10 @@
 use cargo_metadata::Message;
-use rconfig::{ConfigOption, Value, ValueType};
+use clap::Parser;
+use rconfig::{ConfigOption, JsonMap, Value, ValueType};
 use std::{
     collections::BTreeMap,
     io::*,
-    process::{Command, Stdio},
+    process::{exit, Command, Stdio},
 };
 
 use std::io;
@@ -21,16 +22,78 @@ struct Rconfig {
     features: String,
 }
 
+#[derive(clap::Parser, Debug)]
+#[command(author, version, about, long_about = None)]
+struct Args {
+    /// Ignore invalid configuration keys
+    #[arg(long)]
+    fix: bool,
+
+    /// Don't ask when removing invalid configuration keys
+    #[arg(long)]
+    force: bool,
+
+    /// Create a new empty `config.toml`
+    #[arg(long)]
+    init: bool,
+
+    /// Features to be passed to the build
+    #[arg(long)]
+    features: Option<String>,
+
+    /// Don't activate default features
+    #[arg(long)]
+    no_default_features: bool,
+}
+
 fn main() {
+    let args = Args::parse();
+
+    let cfg_path = std::path::PathBuf::from("./config.toml");
+
+    let cfg_exists = if let Ok(metadata) = std::fs::metadata(&cfg_path) {
+        if metadata.is_dir() {
+            eprintln!("`config.toml` must be a file not a directory");
+            exit(1);
+        }
+        true
+    } else {
+        false
+    };
+
+    // "fix" things by temporarily removing the config for the build - we need to restore the config before running the TUI
+    // to keep the valid values
+    if args.fix {
+        if !cfg_exists {
+            println!("No `config.toml` found. use `--init` to create a new one.");
+            exit(1);
+        }
+
+        let mut new_file = cfg_path.clone();
+        new_file.set_extension(".toml.old");
+        std::fs::rename(&cfg_path, &new_file).unwrap();
+    }
+
+    let mut cargo_args = vec!["build".to_string(), "--message-format=json".to_string()];
+
+    if let Some(features) = args.features {
+        let features = format!("--features={}", features);
+        cargo_args.push(features);
+    }
+
+    if args.no_default_features {
+        cargo_args.push("--no-default-features".to_string());
+    }
+
     let mut command = Command::new("cargo")
-        .args(&["build", "--message-format=json"])
+        .args(&cargo_args)
         .stdout(Stdio::piped())
         .spawn()
         .unwrap();
 
     let reader = std::io::BufReader::new(command.stdout.take().unwrap());
 
-    let mut result: Vec<Rconfig> = Vec::new();
+    let mut per_crate_configs: Vec<Rconfig> = Vec::new();
     for message in cargo_metadata::Message::parse_stream(reader) {
         match message.unwrap() {
             Message::BuildScriptExecuted(script) => {
@@ -43,7 +106,7 @@ fn main() {
                     let crate_name = env_map.get("__RCONFIG_CRATE").unwrap().to_string();
                     let features = env_map.get("__RCONFIG_FEATURES").unwrap().to_string();
 
-                    result.push(Rconfig {
+                    per_crate_configs.push(Rconfig {
                         crate_name,
                         definition,
                         features,
@@ -54,19 +117,52 @@ fn main() {
         }
     }
 
-    let _output = command.wait().expect("Couldn't get cargo's exit status");
+    let exit_status = command.wait().expect("Couldn't get cargo's exit status");
+    if !exit_status.success() {
+        eprintln!("\n\nA successful build is needed");
+        exit(1);
+    }
 
-    let input = std::fs::read_to_string(std::path::PathBuf::from("./config.toml")).unwrap();
+    if args.fix {
+        let mut new_file = cfg_path.clone();
+        new_file.set_extension(".toml.old");
+        std::fs::rename(&new_file, &cfg_path).unwrap();
+    }
+
+    if args.init {
+        if (cfg_exists && (args.force || ask_confirm("Overwrite the current `config.toml`? (Y/N)")))
+            || !cfg_exists
+        {
+            std::fs::write(&cfg_path, "").expect("Unable to create `config.toml`");
+        }
+    }
+
+    let input = std::fs::read_to_string(cfg_path).expect("`config.toml` missing or not readable");
+
+    // to avoid the need to check things everywhere just make sure the input contains entries for all contained crates
+    let mut input_toml = basic_toml::from_str::<Value>(&input).unwrap();
+    let input_toml = input_toml.as_object_mut().unwrap();
+    for cfg in &per_crate_configs {
+        if !input_toml.contains_key(&cfg.crate_name) {
+            input_toml.insert(
+                cfg.crate_name.clone(),
+                rconfig::Value::Object(JsonMap::new()),
+            );
+        }
+    }
+    let input = basic_toml::to_string(input_toml).unwrap();
+
+    // prepare repository
     let mut all_data: BTreeMap<String, (BTreeMap<String, ConfigOption>, Vec<String>)> =
         BTreeMap::new();
-    for res in result {
-        let definition = std::fs::read_to_string(res.definition).unwrap();
+    for cfg in per_crate_configs {
+        let definition = std::fs::read_to_string(cfg.definition).unwrap();
         let config = rconfig::parse_definition_str(&definition);
         all_data.insert(
-            res.crate_name,
+            cfg.crate_name,
             (
                 config,
-                res.features.split(",").map(|v| v.to_string()).collect(),
+                cfg.features.split(",").map(|v| v.to_string()).collect(),
             ),
         );
     }
@@ -79,6 +175,19 @@ fn main() {
     App::new(repository).run(terminal).unwrap();
 
     restore_terminal().unwrap();
+}
+
+fn ask_confirm(question: &str) -> bool {
+    println!("{}", question);
+    loop {
+        let mut input = [0];
+        let _ = std::io::stdin().read(&mut input);
+        match input[0] as char {
+            'y' | 'Y' => return true,
+            'n' | 'N' => return false,
+            _ => (),
+        }
+    }
 }
 
 struct Repository {
@@ -439,12 +548,19 @@ impl App {
                                                 } else {
                                                     InputMode::Chars
                                                 };
+
+                                                let default = if value_type == ValueType::U32 {
+                                                    Value::Number(0.into())
+                                                } else {
+                                                    Value::String("".to_string())
+                                                };
+
                                                 self.show_input = true;
                                                 self.input = option
                                                     .__value
                                                     .as_ref()
-                                                    .unwrap_or(&Value::String("".to_string()))
-                                                    .to_string();
+                                                    .unwrap_or(&default)
+                                                    .to_string(); // TODO: this formats strings as \"str\"
                                                 self.cursor_position = self.input.len()
                                             }
                                         }
