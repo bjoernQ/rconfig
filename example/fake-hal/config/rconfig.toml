@@ -14,11 +14,11 @@ description = "PSRAM Size"
 depends = [["psram.enable"]]
 type = "enum"
 values = [
-    { description = "1MB", value = 1 },
-    { description = "2MB", value = 2 },
-    { description = "4MB", value = 4 },
+    { description = "1MB", value = "1" },
+    { description = "2MB", value = "2" },
+    { description = "4MB", value = "4" },
 ]
-default = 2
+default = "2"
 
 [psram.options.type]
 description = "PSRAM Type"

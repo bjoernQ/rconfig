@@ -10,7 +10,6 @@
 
 - is it fine to use BTreeMap since it doesn't preserve the order of elements (see https://github.com/serde-rs/serde/issues/269)
 - are we fine with the definition format? do we need more flexibility regarding `depends`?
-- are we fine with getting values as env-vars?
 - probably we want to merge the TUI (as a feature) into `rconfig`?
 
 ## Idea
@@ -38,11 +37,11 @@ description = "PSRAM Size"
 depends = [["psram.enable"]]
 type = "enum"
 values = [
-    { description = "1MB", value = 1 },
-    { description = "2MB", value = 2 },
-    { description = "4MB", value = 4 },
+    { description = "1MB", value = "1" },
+    { description = "2MB", value = "2" },
+    { description = "4MB", value = "4" },
 ]
-default = 2
+default = "2"
 
 [psram.options.type]
 description = "PSRAM Type"
@@ -71,15 +70,18 @@ max = 65536
 Note an option can depend on features and/or other options.
 
 The values are available as
-- `cfg` - e.g. `#[cfg(psram_enable)]`
-- `env-var` - e.g `option_env!("CONFIG_psram_size")`
+- `cfg` - e.g. `#[cfg(psram_enable)]` if the value is `true` or != `0`
+- `cfg` - e.g. `#[cfg(has_psram_size)]` if there is a config value present
+- the config values can get included via `rconfig::include_config!();` macro (need to also add it as a regular dependency in addition to build-dependency to make the macro available)
+    - they are "flat" consts - e.g. `OPTIONS_BUFFER`
+    - also enums get defined via this
 
 The `config.toml` in the binary crate looks like this
 ```toml
 [fake-hal]
 heap.size=30000
 psram.enable=true
-psram.size=4
+psram.size="4"
 psram.type.type="octal"
 [fake-wifi]
 options.ble=false

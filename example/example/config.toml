@@ -1,8 +1,8 @@
 [fake-hal]
 heap.size=37283
 psram.enable=true
-psram.size=4
+psram.size="4"
 psram.type.type="octal"
 [fake-wifi]
 options.ble=true
-options.buffer=4
+options.buffer="2"

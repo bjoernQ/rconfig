@@ -527,7 +527,10 @@ impl App {
                                             } else if value_type == ValueType::Enum {
                                                 let current_value = option
                                                     .__value
-                                                    .unwrap_or(option.default_value.unwrap());
+                                                    .unwrap_or(option.default_value.unwrap())
+                                                    .as_str()
+                                                    .unwrap()
+                                                    .to_owned();
 
                                                 let values = option.values.as_ref().unwrap();
                                                 let index = &values
@@ -540,7 +543,9 @@ impl App {
 
                                                 self.repository.set_value(
                                                     selected,
-                                                    values[index].value.clone(),
+                                                    rconfig::Value::String(
+                                                        values[index].value.to_string(),
+                                                    ),
                                                 )
                                             } else {
                                                 self.input_mode = if value_type == ValueType::U32 {
@@ -596,6 +601,7 @@ impl App {
                         }
                     } else {
                         // input mode key handling
+                        // TODO can we use something like https://crates.io/crates/ratatui_input/ instead ?
                         match key.code {
                             Esc => {
                                 self.show_input = false;

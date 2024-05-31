@@ -1,6 +1,8 @@
+use convert_case::Casing;
 use serde::Deserialize;
-pub use serde_json::Value;
 pub use serde_json::Map as JsonMap;
+pub use serde_json::Value;
+use std::io::Write;
 use std::{collections::BTreeMap as Map, env, path::PathBuf};
 
 #[derive(Deserialize, Debug)]
@@ -30,7 +32,7 @@ pub struct ConfigOption {
 #[derive(Deserialize, Debug, Clone)]
 pub struct ValueItem {
     pub description: String,
-    pub value: Value,
+    pub value: String,
 }
 
 #[derive(Deserialize, Debug, Clone, PartialEq)]
@@ -43,6 +45,33 @@ pub enum ValueType {
     Enum,
     #[serde(rename(deserialize = "string"))]
     String,
+}
+
+impl std::fmt::Display for ValueType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ValueType::Bool => write!(f, "bool"),
+            ValueType::U32 => write!(f, "u32"),
+            ValueType::Enum => write!(f, "enum"),
+            ValueType::String => write!(f, "string"),
+        }
+    }
+}
+
+#[cfg(not(host_os = "windows"))]
+#[macro_export]
+macro_rules! include_config {
+    () => {
+        include!(concat!(env!("OUT_DIR"), "/config.rs"));
+    };
+}
+
+#[cfg(host_os = "windows")]
+#[macro_export]
+macro_rules! include_config {
+    () => {
+        include!(concat!(env!("OUT_DIR"), "\\config.rs"));
+    };
 }
 
 pub fn parse_definition_str(input: &str) -> Map<String, ConfigOption> {
@@ -74,7 +103,7 @@ pub fn evaluate_config_str(
     crate_name: &str,
     mut config: Map<String, ConfigOption>,
     features: Vec<&str>,
-) -> Result<Vec<(String, String)>, Error> {
+) -> Result<Vec<(String, String, ValueType)>, Error> {
     let input = basic_toml::from_str::<Value>(input).unwrap();
     let no_input = basic_toml::from_str::<Value>("").unwrap();
 
@@ -251,7 +280,7 @@ fn get_value(option: &str, all_config: &Map<String, ConfigOption>) -> Option<ser
 }
 
 fn create_result(
-    result: &mut Vec<(String, String)>,
+    result: &mut Vec<(String, String, ValueType)>,
     config: &Map<String, ConfigOption>,
     all_config: &Map<String, ConfigOption>,
     features: &Vec<&str>,
@@ -259,11 +288,19 @@ fn create_result(
 ) {
     for (name, item) in config {
         if let Some(value) = &item.__value {
-            result.push((format!("{}{}", prefix, name), value.to_string()));
+            result.push((
+                format!("{}{}", prefix, name),
+                value.to_string(),
+                item.value_type.as_ref().unwrap().clone(),
+            ));
         } else {
             if let Some(value) = &item.default_value {
                 if is_valid_depends(&item.depends, &all_config, features) {
-                    result.push((format!("{}{}", prefix, name), value.to_string()));
+                    result.push((
+                        format!("{}{}", prefix, name),
+                        value.to_string(),
+                        item.value_type.as_ref().unwrap().clone(),
+                    ));
                 }
             } else {
                 if let Some(options) = item.options.as_ref() {
@@ -306,6 +343,67 @@ fn fuse(value: Value, config: &mut Map<String, ConfigOption>) -> Result<(), Erro
     Ok(())
 }
 
+#[derive(Debug, Clone)]
+struct EnumDefinition {
+    name: String,
+    variant_names: Vec<String>,
+}
+
+fn extract_all_enum_definitions(config: Map<String, ConfigOption>) -> Vec<EnumDefinition> {
+    let mut result = Vec::new();
+
+    extract_all_enum_definitions_recusive(&mut result, &config, "".to_string());
+
+    result
+}
+
+fn extract_all_enum_definitions_recusive(
+    result: &mut Vec<EnumDefinition>,
+    config: &Map<String, ConfigOption>,
+    prefix: String,
+) {
+    for (name, item) in config {
+        if let Some(ValueType::Enum) = item.value_type {
+            let mut variant_names = Vec::new();
+            for variant in item.values.as_ref().unwrap() {
+                variant_names.push(to_variant_name(&variant.value));
+            }
+
+            let item = EnumDefinition {
+                name: format!(
+                    "{}{}",
+                    prefix.to_case(convert_case::Case::Pascal),
+                    name.to_case(convert_case::Case::Pascal)
+                ),
+                variant_names,
+            };
+            result.push(item);
+        } else {
+            if let Some(options) = item.options.as_ref() {
+                extract_all_enum_definitions_recusive(
+                    result,
+                    options,
+                    format!(
+                        "{}{}",
+                        prefix.to_case(convert_case::Case::Pascal),
+                        name.to_case(convert_case::Case::Pascal)
+                    ),
+                );
+            }
+        }
+    }
+}
+
+pub fn to_variant_name(str: &str) -> String {
+    let str = if str.chars().next().unwrap().is_numeric() {
+        format!("Variant{}", str)
+    } else {
+        str.to_string()
+    };
+
+    str.to_case(convert_case::Case::Pascal)
+}
+
 pub fn apply_config(definition: &PathBuf) {
     // for tooling
     println!(
@@ -325,16 +423,61 @@ pub fn apply_config(definition: &PathBuf) {
 
     let cfg = load_config(&definition, &crate_name);
 
-    for (name, value) in cfg {
+    let out = &PathBuf::from(env::var_os("OUT_DIR").unwrap());
+    let mut config_rs = std::fs::File::create(out.join("config.rs")).unwrap();
+
+    let enums = extract_all_enum_definitions(parse_definition_str(&definition));
+    for e in enums {
+        config_rs
+            .write("#[derive(Debug,Clone,Copy)]\n".as_bytes())
+            .unwrap();
+        config_rs
+            .write(format!("pub enum {} {{\n", &e.name).as_bytes())
+            .unwrap();
+        for v in e.variant_names {
+            config_rs.write(format!("{},\n", &v).as_bytes()).unwrap();
+        }
+        config_rs.write("}\n".as_bytes()).unwrap();
+    }
+
+    for (name, value, value_type) in cfg {
+        eprintln!("{name}");
         let name = name.replace(".", "_");
+        println!("cargo::rustc-cfg=has_{name}");
         if value != "0" && value != "false" {
             println!("cargo::rustc-cfg={name}");
         }
-        println!("cargo::rustc-env=CONFIG_{name}={value}");
+
+        if value_type != ValueType::Enum {
+            config_rs
+                .write(
+                    format!(
+                        "pub const {}: {} = {};\n",
+                        name.to_uppercase(),
+                        value_type.to_string(),
+                        value
+                    )
+                    .as_bytes(),
+                )
+                .unwrap();
+        } else {
+            config_rs
+                .write(
+                    format!(
+                        "pub const {}: {} = {}::{};\n",
+                        name.to_uppercase(),
+                        to_variant_name(&name),
+                        to_variant_name(&name),
+                        to_variant_name(&value.replace("\"", "")),
+                    )
+                    .as_bytes(),
+                )
+                .unwrap();
+        }
     }
 }
 
-pub fn load_config(definition: &str, crate_name: &str) -> Vec<(String, String)> {
+pub fn load_config(definition: &str, crate_name: &str) -> Vec<(String, String, ValueType)> {
     let out_dir = PathBuf::from(env::var_os("OUT_DIR").unwrap());
 
     let root_path = find_root_path(&out_dir);
@@ -394,6 +537,7 @@ fn find_root_path(out_dir: &PathBuf) -> Option<PathBuf> {
     let mut out_dir = PathBuf::from(out_dir);
 
     // TODO better also check `CARGO_TARGET_DIR` to know if the user wants a relocated target dir
+    // OR use `CARGO_MANIFEST_DIR`?
     while !out_dir.ends_with("target") {
         if !out_dir.pop() {
             // We ran out of directories...
@@ -426,11 +570,11 @@ mod tests {
     depends = [["psram.enable"]]
     type = "enum"
     values = [
-        { description = "1MB", value = 1 },
-        { description = "2MB", value = 2 },
-        { description = "4MB", value = 4 },
+        { description = "1MB", value = "1" },
+        { description = "2MB", value = "2" },
+        { description = "4MB", value = "4" },
     ]
-    default = 2
+    default = "2"
     
     [psram.options.type]
     description = "PSRAM Type"
@@ -444,7 +588,7 @@ mod tests {
         { description = "Quad", value = "quad" },
         { description = "Octal", value = "octal" },
     ]
-    default = 2
+    default = "quad"
     
     [heap]
     description = "Heapsize"
@@ -479,7 +623,7 @@ mod tests {
         println!("{:#?}", effective_config);
 
         assert_eq!(
-            vec![("heap.size".to_string(), "30000".to_string())],
+            vec![("heap.size".to_string(), "30000".to_string(), ValueType::U32)],
             effective_config
         );
     }
@@ -503,10 +647,18 @@ mod tests {
 
         assert_eq!(
             vec![
-                ("heap.size".to_string(), "30000".to_string()),
-                ("psram.enable".to_string(), "true".to_string()),
-                ("psram.size".to_string(), "4".to_string()),
-                ("psram.type.type".to_string(), "2".to_string()),
+                ("heap.size".to_string(), "30000".to_string(), ValueType::U32),
+                (
+                    "psram.enable".to_string(),
+                    "true".to_string(),
+                    ValueType::Bool
+                ),
+                ("psram.size".to_string(), "4".to_string(), ValueType::Enum),
+                (
+                    "psram.type.type".to_string(),
+                    "2".to_string(),
+                    ValueType::Enum
+                ),
             ],
             effective_config
         );
@@ -527,8 +679,12 @@ mod tests {
 
         assert_eq!(
             vec![
-                ("heap.size".to_string(), "30000".to_string()),
-                ("psram.enable".to_string(), "false".to_string()),
+                ("heap.size".to_string(), "30000".to_string(), ValueType::U32),
+                (
+                    "psram.enable".to_string(),
+                    "false".to_string(),
+                    ValueType::Bool
+                ),
             ],
             effective_config
         );
@@ -552,9 +708,13 @@ mod tests {
 
         assert_eq!(
             vec![
-                ("heap.size".to_string(), "30000".to_string()),
-                ("psram.enable".to_string(), "true".to_string()),
-                ("psram.size".to_string(), "4".to_string()),
+                ("heap.size".to_string(), "30000".to_string(), ValueType::U32),
+                (
+                    "psram.enable".to_string(),
+                    "true".to_string(),
+                    ValueType::Bool
+                ),
+                ("psram.size".to_string(), "4".to_string(), ValueType::Enum),
             ],
             effective_config
         );
@@ -579,12 +739,12 @@ mod tests {
         depends = [["psram.enable"]]
         type = "enum"
         values = [
-            { description = "1MB", value = 1 },
-            { description = "2MB", value = 2 },
-            { description = "4MB", value = 4 },
+            { description = "1MB", value = "1" },
+            { description = "2MB", value = "2" },
+            { description = "4MB", value = "4" },
         ]
-        default = 2
-        __value = 4
+        default = "2"
+        __value = "4"
         
         [psram.options.type]
         description = "PSRAM Type"
@@ -621,7 +781,7 @@ mod tests {
             vec![
                 ("heap.size".to_string(), "4949".to_string()),
                 ("psram.enable".to_string(), "true".to_string()),
-                ("psram.size".to_string(), "4".to_string()),
+                ("psram.size".to_string(), "\"4\"".to_string()),
                 ("psram.type.type".to_string(), "\"octal\"".to_string()),
             ],
             effective_config

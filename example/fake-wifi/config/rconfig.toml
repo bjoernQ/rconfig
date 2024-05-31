@@ -13,8 +13,8 @@ description = "BLE Buffer Size"
 depends = [["options.ble"]]
 type = "enum"
 values = [
-    { description = "1k", value = 1 },
-    { description = "2k", value = 2 },
-    { description = "4k", value = 4 },
+    { description = "1k", value = "1" },
+    { description = "2k", value = "2" },
+    { description = "4k", value = "4" },
 ]
-default = 1
+default = "1"
