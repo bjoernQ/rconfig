@@ -1,14 +1,13 @@
 # rconfig
 
 ## Known Issues
-- almost non-existing error handling
+- almost non-existing error handling implemented - unwraps all over the place
 - not everything is validated
 - TUI editing is not too good
 - code is just prototyping ... I guess it can be cleaned up enough to make it useable in a real project with some effort (or re-implemented from scratch based on this)
 
 ## Open Questions
 
-- are we fine with the definition format? do we need more flexibility regarding `depends`?
 - probably we want to merge the TUI (as a feature) into `rconfig`?
 
 ## Idea
@@ -18,12 +17,13 @@ In your crate's `build.rs` you need this
     rconfig::apply_config(&PathBuf::from("./config/rconfig.toml"));
 ```
 
-A config-definition can look like this
+A config-definition can looks like this
 ```toml
 # something without a type is just a menu item
 [psram]
 description = "PSRAM"
-depends = [["esp32", "esp32s2", "esp32s3"]]
+# dependencies are actually Rhai script expressions which evaluate to bool
+depends = "feature(\"esp32\") || feature(\"esp32s2\") || feature(\"esp32s3\")"
 
 # something with a type is something which can be configured
 [psram.options.enable]
@@ -33,7 +33,7 @@ default = false
 
 [psram.options.size]
 description = "PSRAM Size"
-depends = [["psram.enable"]]
+depends = "enabled(\"psram.enable\")"
 type = "enum"
 values = [
     { description = "1MB", value = "1" },
@@ -44,11 +44,11 @@ default = "2"
 
 [psram.options.type]
 description = "PSRAM Type"
-depends = [["esp32s3"],["psram.enable"]]
+depends = "feature(\"esp32s3\") && enabled(\"psram.enable\")"
 
 [psram.options.type.options.type]
 description = "PSRAM Type"
-depends = [["esp32s3"]]
+depends = "feature(\"esp32s3\")"
 type = "enum"
 values = [
     { description = "Quad", value = "quad" },
@@ -62,8 +62,8 @@ description = "Heapsize"
 [heap.options.size]
 description = "Bytes to allocate"
 type = "u32"
-min = 0
-max = 65536
+# validations are actually Rhai script expressions which evaluate to bool
+valid = "value >= 0 && value <= 80000"
 ```
 
 Note an option can depend on features and/or other options.

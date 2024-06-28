@@ -1,5 +1,7 @@
 use convert_case::Casing;
 use linked_hash_map::LinkedHashMap as Map;
+use rhai::Engine;
+use rhai::Scope;
 use serde::Deserialize;
 pub use serde_json::Map as JsonMap;
 pub use serde_json::Value;
@@ -10,6 +12,7 @@ use std::{env, path::PathBuf};
 pub enum Error {
     InvalidKey,
     InvalidConfiguration(String),
+    InvalidConfigurationValue(String),
 }
 
 #[derive(Deserialize, Debug, Clone)]
@@ -18,8 +21,9 @@ pub struct ConfigOption {
     #[serde(rename(deserialize = "type"))]
     pub value_type: Option<ValueType>,
 
-    #[serde(default)]
-    pub depends: Vec<Vec<String>>,
+    pub depends: Option<String>,
+    pub valid: Option<String>,
+
     pub values: Option<Vec<ValueItem>>,
 
     #[serde(rename(deserialize = "default"))]
@@ -171,7 +175,7 @@ fn remove_non_applicable(
 ) -> Result<Map<String, ConfigOption>, Error> {
     for (name, item) in config_part {
         let mut item = item.clone();
-        let take = is_valid_depends(&item.depends, all_config, features);
+        let take = is_valid_depends(item.depends.clone(), all_config, features);
 
         if let Some(options) = item.options.as_ref() {
             let options = remove_non_applicable(options, all_config, features, Map::new())?;
@@ -193,11 +197,15 @@ fn validate(
     take: bool,
 ) -> Result<(), Error> {
     for (name, item) in config_part {
-        let take = take && is_valid_depends(&item.depends, all_config, features);
+        let take = take && is_valid_depends(item.depends.clone(), all_config, features);
 
         if let Some(_value) = &item.__value {
             if !take {
                 return Err(Error::InvalidConfiguration(name.to_string()));
+            }
+
+            if !is_value_valid(item.valid.clone(), _value, all_config, features) {
+                return Err(Error::InvalidConfigurationValue(name.to_string()));
             }
         }
 
@@ -209,22 +217,63 @@ fn validate(
     Ok(())
 }
 
-fn is_valid_depends(
-    depends: &Vec<Vec<String>>,
+fn is_value_valid(
+    validation: Option<String>,
+    value: &Value,
     all_config: &Map<String, ConfigOption>,
     features: &Vec<&str>,
 ) -> bool {
-    for depend in depends {
-        if !depend.iter().any(|d| features.contains(&d.as_str()))
-            && !depend
-                .iter()
-                .any(|d| is_value_resolves_to_set(d, all_config))
-        {
-            return false;
-        }
-    }
+    if let Some(validation) = validation {
+        // is this expensive? should we reuse the Engine?
+        let mut engine = Engine::new();
 
-    true
+        let script_features: Vec<String> = features.iter().map(|s| s.to_string()).collect();
+
+        let f = move |what: String| script_features.contains(&what);
+        engine.register_fn("feature", f);
+
+        let all_config = all_config.clone();
+        let f = move |what: &str| is_value_resolves_to_set(what, &all_config);
+        engine.register_fn("enabled", f);
+
+        let mut scope = Scope::new();
+        match value {
+            Value::Bool(b) => scope.push("value", *b),
+            Value::Number(n) => scope.push("value", n.as_u64().unwrap() as i64),
+            Value::String(s) => scope.push("value", s.as_str().to_string()),
+            _ => scope.push("value", false),
+        };
+
+        engine
+            .eval_with_scope::<bool>(&mut scope, &validation)
+            .unwrap()
+    } else {
+        true
+    }
+}
+
+fn is_valid_depends(
+    depends: Option<String>,
+    all_config: &Map<String, ConfigOption>,
+    features: &Vec<&str>,
+) -> bool {
+    if let Some(depends) = depends {
+        // is this expensive? should we reuse the Engine?
+        let mut engine = Engine::new();
+
+        let script_features: Vec<String> = features.iter().map(|s| s.to_string()).collect();
+
+        let f = move |what: String| script_features.contains(&what);
+        engine.register_fn("feature", f);
+
+        let all_config = all_config.clone();
+        let f = move |what: &str| is_value_resolves_to_set(what, &all_config);
+        engine.register_fn("enabled", f);
+
+        engine.eval::<bool>(&depends).unwrap()
+    } else {
+        true
+    }
 }
 
 fn is_value_resolves_to_set(option: &str, all_config: &Map<String, ConfigOption>) -> bool {
@@ -296,7 +345,7 @@ fn create_result(
             ));
         } else {
             if let Some(value) = &item.default_value {
-                if is_valid_depends(&item.depends, &all_config, features) {
+                if is_valid_depends(item.depends.clone(), &all_config, features) {
                     result.push((
                         format!("{}{}", prefix, name),
                         value.to_string(),
@@ -558,7 +607,7 @@ mod tests {
     const DEFINITION: &str = r#"# something without a type is just a menu item
     [psram]
     description = "PSRAM"
-    depends = [["esp32", "esp32s2", "esp32s3"]]
+    depends = "feature(\"esp32\") || feature(\"esp32s2\") || feature(\"esp32s3\")"
     
     # something with a type is something which can be configured
     [psram.options.enable]
@@ -568,7 +617,7 @@ mod tests {
     
     [psram.options.size]
     description = "PSRAM Size"
-    depends = [["psram.enable"]]
+    depends = "enabled(\"psram.enable\")"
     type = "enum"
     values = [
         { description = "1MB", value = "1" },
@@ -579,11 +628,11 @@ mod tests {
     
     [psram.options.type]
     description = "PSRAM Type"
-    depends = [["esp32s3"],["psram.enable"]]
+    depends = "feature(\"esp32s3\") && enabled(\"psram.enable\")"
     
     [psram.options.type.options.type]
     description = "PSRAM Type"
-    depends = [["esp32s3"]]
+    depends = "feature(\"esp32s3\")"
     type = "enum"
     values = [
         { description = "Quad", value = "quad" },
@@ -597,8 +646,7 @@ mod tests {
     [heap.options.size]
     description = "Bytes to allocate"
     type = "u32"
-    min = 0
-    max = 65536
+    valid = "value >= 0 && value <= 80000"
     "#;
 
     #[test]
@@ -726,7 +774,7 @@ mod tests {
         let cfg = r#"# something without a type is just a menu item
         [psram]
         description = "PSRAM"
-        depends = [["esp32", "esp32s2", "esp32s3"]]
+        depends = "feature(\"esp32\") || feature(\"esp32s2\") || feature(\"esp32s3\")"
         
         # something with a type is something which can be configured
         [psram.options.enable]
@@ -737,7 +785,7 @@ mod tests {
         
         [psram.options.size]
         description = "PSRAM Size"
-        depends = [["psram.enable"]]
+        depends = "enabled(\"psram.enable\")"
         type = "enum"
         values = [
             { description = "1MB", value = "1" },
@@ -749,11 +797,11 @@ mod tests {
         
         [psram.options.type]
         description = "PSRAM Type"
-        depends = [["esp32s3"],["psram.enable"]]
+        depends = "feature(\"esp32s3\") && enabled(\"psram.enable\")"
         
         [psram.options.type.options.type]
         description = "PSRAM Type"
-        depends = [["esp32s3"]]
+        depends = "feature(\"esp32s3\")"
         type = "enum"
         values = [
             { description = "Quad", value = "quad" },
@@ -768,8 +816,7 @@ mod tests {
         [heap.options.size]
         description = "Bytes to allocate"
         type = "u32"
-        min = 0
-        max = 65536
+        valid = "value >= 0 && value <= 80000"
         __value = 4949
         "#;
 
