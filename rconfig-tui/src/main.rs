@@ -394,7 +394,11 @@ impl Repository {
         }
     }
 
-    pub fn set_value(&mut self, which: usize, value: rconfig::Value) {
+    pub fn set_value(
+        &mut self,
+        which: usize,
+        value: rconfig::Value,
+    ) -> core::result::Result<(), rconfig::Error> {
         let next = self
             .get_current_level()
             .into_iter()
@@ -431,7 +435,17 @@ impl Repository {
 
         item.as_object_mut().unwrap().insert(next, value);
 
+        //rconfig::evaluate_config_str(input, crate_name, config, features)
+        let user_cfg = basic_toml::to_string(&cfg).unwrap();
+
+        for (krate, (config, features)) in &self.data {
+            let features = features.iter().map(|f| f.as_str()).collect();
+            rconfig::evaluate_config_str(&user_cfg, krate, config.clone(), features)?;
+        }
+
         self.user_cfg = basic_toml::to_string(&cfg).unwrap();
+
+        Ok(())
     }
 }
 
@@ -471,6 +485,8 @@ struct App {
     cursor_position: usize,
 
     cursor: Option<(u16, u16)>,
+
+    show_error: bool,
 }
 
 impl App {
@@ -485,6 +501,7 @@ impl App {
             input_mode: InputMode::Chars,
             cursor_position: 0,
             cursor: None,
+            show_error: false,
         }
     }
 }
@@ -518,10 +535,12 @@ impl App {
                                                     .unwrap_or(option.default_value.unwrap())
                                                     .as_bool()
                                                     .unwrap();
-                                                self.repository.set_value(
-                                                    selected,
-                                                    rconfig::Value::Bool(!current_value),
-                                                )
+                                                self.repository
+                                                    .set_value(
+                                                        selected,
+                                                        rconfig::Value::Bool(!current_value),
+                                                    )
+                                                    .ok();
                                             } else if value_type == ValueType::Enum {
                                                 let current_value = option
                                                     .__value
@@ -539,12 +558,14 @@ impl App {
                                                     .0;
                                                 let index = (index + 1) % &values.len();
 
-                                                self.repository.set_value(
-                                                    selected,
-                                                    rconfig::Value::String(
-                                                        values[index].value.to_string(),
-                                                    ),
-                                                )
+                                                self.repository
+                                                    .set_value(
+                                                        selected,
+                                                        rconfig::Value::String(
+                                                            values[index].value.to_string(),
+                                                        ),
+                                                    )
+                                                    .ok();
                                             } else {
                                                 self.input_mode = if value_type == ValueType::U32 {
                                                     InputMode::Number
@@ -600,6 +621,8 @@ impl App {
                     } else {
                         // input mode key handling
                         // TODO can we use something like https://crates.io/crates/ratatui_input/ instead ?
+
+                        self.show_error = false;
                         match key.code {
                             Esc => {
                                 self.show_input = false;
@@ -626,30 +649,44 @@ impl App {
                                 if self.repository.is_value(selected) {
                                     let option = self.repository.get_option(selected);
 
+                                    let mut error = false;
                                     if let Some(option) = option {
                                         match option.value_type {
                                             Some(vt) => match vt {
                                                 ValueType::U32 => {
-                                                    let val = (self.input.parse::<u32>()).unwrap();
-                                                    self.repository.set_value(
-                                                        selected,
-                                                        rconfig::Value::Number(val.into()),
-                                                    );
+                                                    let val = (self.input.parse::<u32>())
+                                                        .unwrap_or(u32::MAX);
+                                                    self.repository
+                                                        .set_value(
+                                                            selected,
+                                                            rconfig::Value::Number(val.into()),
+                                                        )
+                                                        .unwrap_or_else(|_| {
+                                                            error = true;
+                                                        });
                                                 }
                                                 ValueType::String => {
                                                     let val = self.input.clone();
-                                                    self.repository.set_value(
-                                                        selected,
-                                                        rconfig::Value::String(val),
-                                                    );
+                                                    self.repository
+                                                        .set_value(
+                                                            selected,
+                                                            rconfig::Value::String(val),
+                                                        )
+                                                        .unwrap_or_else(|_| {
+                                                            error = true;
+                                                        });
                                                 }
                                                 _ => (),
                                             },
                                             None => (),
                                         }
                                     }
-                                    self.show_input = false;
-                                    self.cursor = None;
+                                    if !error {
+                                        self.show_input = false;
+                                        self.cursor = None;
+                                    } else {
+                                        self.show_error = true;
+                                    }
                                 }
                             }
                             KeyCode::Char(to_insert) => {
@@ -709,8 +746,13 @@ impl Widget for &mut App {
             area.height = 3;
             block.render(area, buf);
 
-            let text = Text::from(Line::from(self.input.clone()))
-                .patch_style(Style::default().bg(Color::Gray).fg(Color::Black));
+            let text = Text::from(Line::from(self.input.clone())).patch_style(
+                Style::default().bg(Color::Gray).fg(if self.show_error {
+                    Color::Red
+                } else {
+                    Color::Black
+                }),
+            );
             area.y = area.y + area.height / 2;
             area.x = area.x + 2;
             area.width = area.width - 4;
