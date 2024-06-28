@@ -8,7 +8,6 @@
 
 ## Open Questions
 
-- is it fine to use BTreeMap since it doesn't preserve the order of elements (see https://github.com/serde-rs/serde/issues/269)
 - are we fine with the definition format? do we need more flexibility regarding `depends`?
 - probably we want to merge the TUI (as a feature) into `rconfig`?
 

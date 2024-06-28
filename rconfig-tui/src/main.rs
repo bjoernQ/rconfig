@@ -1,8 +1,8 @@
 use cargo_metadata::Message;
 use clap::Parser;
+use linked_hash_map::LinkedHashMap as Map;
 use rconfig::{ConfigOption, JsonMap, Value, ValueType};
 use std::{
-    collections::BTreeMap,
     io::*,
     process::{exit, Command, Stdio},
 };
@@ -98,8 +98,7 @@ fn main() {
         match message.unwrap() {
             Message::BuildScriptExecuted(script) => {
                 let envs = script.env;
-                let env_map: BTreeMap<_, _> =
-                    envs.into_iter().map(|data| (data.0, data.1)).collect();
+                let env_map: Map<_, _> = envs.into_iter().map(|data| (data.0, data.1)).collect();
 
                 if env_map.contains_key("__RCONFIG") {
                     let definition = env_map.get("__RCONFIG").unwrap().replace("%N%", "\n");
@@ -153,8 +152,7 @@ fn main() {
     let input = basic_toml::to_string(input_toml).unwrap();
 
     // prepare repository
-    let mut all_data: BTreeMap<String, (BTreeMap<String, ConfigOption>, Vec<String>)> =
-        BTreeMap::new();
+    let mut all_data: Map<String, (Map<String, ConfigOption>, Vec<String>)> = Map::new();
     for cfg in per_crate_configs {
         let definition = std::fs::read_to_string(cfg.definition).unwrap();
         let config = rconfig::parse_definition_str(&definition);
@@ -191,14 +189,14 @@ fn ask_confirm(question: &str) -> bool {
 }
 
 struct Repository {
-    data: BTreeMap<String, (BTreeMap<String, ConfigOption>, Vec<String>)>,
+    data: Map<String, (Map<String, ConfigOption>, Vec<String>)>,
     user_cfg: String,
     path: Vec<String>,
 }
 
 impl Repository {
     pub fn new(
-        data: BTreeMap<String, (BTreeMap<String, ConfigOption>, Vec<String>)>,
+        data: Map<String, (Map<String, ConfigOption>, Vec<String>)>,
         user_cfg: String,
     ) -> Self {
         Self {
@@ -236,7 +234,7 @@ impl Repository {
         out
     }
 
-    fn current(&self) -> BTreeMap<String, ConfigOption> {
+    fn current(&self) -> Map<String, ConfigOption> {
         let crate_name = &self.path[0];
         let current = &(self.data[crate_name]).0;
         let features = self.current_features();

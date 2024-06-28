@@ -1,9 +1,10 @@
 use convert_case::Casing;
+use linked_hash_map::LinkedHashMap as Map;
 use serde::Deserialize;
 pub use serde_json::Map as JsonMap;
 pub use serde_json::Value;
 use std::io::Write;
-use std::{collections::BTreeMap as Map, env, path::PathBuf};
+use std::{env, path::PathBuf};
 
 #[derive(Deserialize, Debug)]
 pub enum Error {
@@ -647,7 +648,6 @@ mod tests {
 
         assert_eq!(
             vec![
-                ("heap.size".to_string(), "30000".to_string(), ValueType::U32),
                 (
                     "psram.enable".to_string(),
                     "true".to_string(),
@@ -659,6 +659,7 @@ mod tests {
                     "2".to_string(),
                     ValueType::Enum
                 ),
+                ("heap.size".to_string(), "30000".to_string(), ValueType::U32),
             ],
             effective_config
         );
@@ -679,12 +680,12 @@ mod tests {
 
         assert_eq!(
             vec![
-                ("heap.size".to_string(), "30000".to_string(), ValueType::U32),
                 (
                     "psram.enable".to_string(),
                     "false".to_string(),
                     ValueType::Bool
                 ),
+                ("heap.size".to_string(), "30000".to_string(), ValueType::U32),
             ],
             effective_config
         );
@@ -708,13 +709,13 @@ mod tests {
 
         assert_eq!(
             vec![
-                ("heap.size".to_string(), "30000".to_string(), ValueType::U32),
                 (
                     "psram.enable".to_string(),
                     "true".to_string(),
                     ValueType::Bool
                 ),
                 ("psram.size".to_string(), "4".to_string(), ValueType::Enum),
+                ("heap.size".to_string(), "30000".to_string(), ValueType::U32),
             ],
             effective_config
         );
@@ -779,10 +780,10 @@ mod tests {
 
         assert_eq!(
             vec![
-                ("heap.size".to_string(), "4949".to_string()),
                 ("psram.enable".to_string(), "true".to_string()),
                 ("psram.size".to_string(), "\"4\"".to_string()),
                 ("psram.type.type".to_string(), "\"octal\"".to_string()),
+                ("heap.size".to_string(), "4949".to_string()),
             ],
             effective_config
         );
