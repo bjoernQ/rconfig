@@ -399,6 +399,17 @@ impl Repository {
         which: usize,
         value: rconfig::Value,
     ) -> core::result::Result<(), rconfig::Error> {
+        // check value against validation rule
+        let current = self.get_option(which).unwrap();
+        let crate_cfg = &(self.data[&self.path[0]]).0;
+        let features = self.current_features().iter().map(|s| s.as_str()).collect();
+        if !rconfig::is_value_valid(current.valid.clone(), &value, &crate_cfg, &features) {
+            return Err(rconfig::Error::InvalidConfigurationValue(
+                self.current_title(),
+            ));
+        }
+
+        // find where to insert/update
         let next = self
             .get_current_level()
             .into_iter()
@@ -432,16 +443,7 @@ impl Repository {
         if item.as_object_mut().unwrap().contains_key(&next) {
             item.as_object_mut().unwrap().remove(&next);
         }
-
         item.as_object_mut().unwrap().insert(next, value);
-
-        //rconfig::evaluate_config_str(input, crate_name, config, features)
-        let user_cfg = basic_toml::to_string(&cfg).unwrap();
-
-        for (krate, (config, features)) in &self.data {
-            let features = features.iter().map(|f| f.as_str()).collect();
-            rconfig::evaluate_config_str(&user_cfg, krate, config.clone(), features)?;
-        }
 
         self.user_cfg = basic_toml::to_string(&cfg).unwrap();
 

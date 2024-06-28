@@ -217,7 +217,7 @@ fn validate(
     Ok(())
 }
 
-fn is_value_valid(
+pub fn is_value_valid(
     validation: Option<String>,
     value: &Value,
     all_config: &Map<String, ConfigOption>,
