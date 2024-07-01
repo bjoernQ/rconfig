@@ -1,14 +1,16 @@
 # rconfig
 
 ## Known Issues
-- almost non-existing error handling implemented - unwraps all over the place
-- not everything is validated
-- TUI editing is not too good
-- code is just prototyping ... I guess it can be cleaned up enough to make it useable in a real project with some effort (or re-implemented from scratch based on this)
+- almost non-existing error handling implemented - unwraps all over the place (that's a question of the implementation not a weakness of the concept!)
+- not everything is validated (e.g. unknown TOML keys - that's a question of the implementation not a weakness of the concept!)
+- TUI editing is not too good (see below - can be improved or replaced by a GUI)
+- code is just prototyping ... I guess it can be cleaned up enough to make it useable in a real project with some effort (or re-implemented from scratch based on this). There is little sense in trying to have perfect code if we don't know yet what we want to build!
 
 ## Open Questions
 
 - probably we want to merge the TUI (as a feature) into `rconfig`?
+- Have a GUI instead of TUI?
+- Rethink "depends" depending on features? See https://github.com/bjoernQ/rconfig/issues/6#issuecomment-2199809818 - probably better to only allow dependencies on (parent) config keys and have an "active-when" to know for which features the config element is for? (Emit warnings when a value isn't used / show in TUI/GUI)
 
 ## Idea
 
@@ -23,7 +25,7 @@ A config-definition can looks like this
 [psram]
 description = "PSRAM"
 # dependencies are actually Rhai script expressions which evaluate to bool
-depends = "feature(\"esp32\") || feature(\"esp32s2\") || feature(\"esp32s3\")"
+depends = 'feature("esp32") || feature("esp32s2") || feature("esp32s3")'
 
 # something with a type is something which can be configured
 [psram.options.enable]
@@ -33,7 +35,7 @@ default = false
 
 [psram.options.size]
 description = "PSRAM Size"
-depends = "enabled(\"psram.enable\")"
+depends = 'enabled("psram.enable")'
 type = "enum"
 values = [
     { description = "1MB", value = "1" },
@@ -44,11 +46,11 @@ default = "2"
 
 [psram.options.type]
 description = "PSRAM Type"
-depends = "feature(\"esp32s3\") && enabled(\"psram.enable\")"
+depends = 'feature("esp32s3") && enabled("psram.enable")'
 
 [psram.options.type.options.type]
 description = "PSRAM Type"
-depends = "feature(\"esp32s3\")"
+depends = 'feature("esp32s3")'
 type = "enum"
 values = [
     { description = "Quad", value = "quad" },
@@ -63,7 +65,7 @@ description = "Heapsize"
 description = "Bytes to allocate"
 type = "u32"
 # validations are actually Rhai script expressions which evaluate to bool
-valid = "value >= 0 && value <= 80000"
+valid = 'value >= 0 && value <= 80000'
 ```
 
 Note an option can depend on features and/or other options.
@@ -109,3 +111,5 @@ Options
 - `--init`                 Create a new empty `config.toml`
 - `--features <FEATURES>`  Features to be passed to the build
 - `--no-default-features`  Don't activate default features
+
+While Ratatui is a really nice crate maybe having a GUI instead of a TUI is easier. (e.g. both eGui and Iced are both nice and come with a lot of useful widgets).

@@ -1,7 +1,7 @@
 # something without a type is just a menu item
 [psram]
 description = "PSRAM"
-depends = "feature(\"esp32\") || feature(\"esp32s2\") || feature(\"esp32s3\")"
+depends = 'feature("esp32") || feature("esp32s2") || feature("esp32s3")'
 
 # something with a type is something which can be configured
 [psram.options.enable]
@@ -11,7 +11,7 @@ default = false
 
 [psram.options.size]
 description = "PSRAM Size"
-depends = "enabled(\"psram.enable\")"
+depends = 'enabled("psram.enable")'
 type = "enum"
 values = [
     { description = "1MB", value = "1" },
@@ -22,11 +22,11 @@ default = "2"
 
 [psram.options.type]
 description = "PSRAM Type"
-depends = "feature(\"esp32s3\") && enabled(\"psram.enable\")"
+depends = 'feature("esp32s3") && enabled("psram.enable")'
 
 [psram.options.type.options.type]
 description = "PSRAM Type"
-depends = "feature(\"esp32s3\")"
+depends = 'feature("esp32s3")'
 type = "enum"
 values = [
     { description = "Quad", value = "quad" },
@@ -40,4 +40,4 @@ description = "Heapsize"
 [heap.options.size]
 description = "Bytes to allocate"
 type = "u32"
-valid = "value >= 0 && value <= 80000"
+valid = 'value >= 0 && value <= 80000'

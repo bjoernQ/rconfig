@@ -10,7 +10,7 @@ default = false
 
 [options.options.buffer]
 description = "BLE Buffer Size"
-depends = "enabled(\"options.ble\")"
+depends = 'enabled("options.ble")'
 type = "enum"
 values = [
     { description = "1k", value = "1" },
