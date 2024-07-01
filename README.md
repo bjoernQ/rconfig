@@ -11,6 +11,8 @@
 - probably we want to merge the TUI (as a feature) into `rconfig`?
 - Have a GUI instead of TUI?
 - Rethink "depends" depending on features? See https://github.com/bjoernQ/rconfig/issues/6#issuecomment-2199809818 - probably better to only allow dependencies on (parent) config keys and have an "active-when" to know for which features the config element is for? (Emit warnings when a value isn't used / show in TUI/GUI)
+- Are we okay with using TOML to define the configuration? (Obviously we want to use it for ther user's config.) Coming up with our own syntax and parser (based on e.g. PEG) should be easy enough.
+- Probably reconsider naming of the user's config (`config.toml` might be easy to confuse with `.cargo/config.toml`)
 
 ## Idea
 
